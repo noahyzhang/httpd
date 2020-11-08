@@ -20,9 +20,9 @@ private:
     void cannot_execute();
     void bad_request();
     void cat(FILE* resource);
-    void headers(std::string& filename);
-    void server_file(std::string& filename);
-    void execute_cgi(std::string& path,std::string& method,int found);
+    void headers(const char* filename);
+    void server_file(const char* filename);
+    void execute_cgi(const char* path,const char* method,const char* query_string);
     void not_found(int client);
     void unimplemented(int client);
     int get_line(int sock,char* buf,int size);
@@ -112,7 +112,7 @@ void thread::not_found(int client)
     send(client,buf.c_str(),buf.size(),0);
 }
 
-void thread::headers(std::string& filename)
+void thread::headers(const char* filename)
 {
     std::string buf;
     buf = "HTTP/1.0 200 OK\r\n";
@@ -136,15 +136,15 @@ void thread::cat(FILE* resource)
     }
 }
 
-void thread::server_file(std::string& filename)
+void thread::server_file(const char* filename)
 {
     FILE *resource = NULL;
     int numchars = 1;
-    std::string buf;
+    char buf[1024];
     buf[0] = 'A'; buf[1] = '\0';
-    while((numchars > 0) && buf != "\n")
-        numchars = this->get_line(this->client_sock,buf);
-    resource = fopen(filename.c_str(),"r");
+    while((numchars > 0) && strcmp("\n",buf))
+        numchars = this->get_line(this->client_sock,buf,sizeof(buf));
+    resource = fopen(filename,"r");
     if(resource == NULL)
         this->not_found(this->client_sock);
     else
@@ -185,7 +185,7 @@ void thread::cannot_execute()
 
 void thread::execute_cgi(const char* path,const char* method,const char* query_string)
 {
-    std::string buf;
+    char buf[1024];
     int cgi_output[2];
     int cgi_input[2];
     pid_t pid;
@@ -196,16 +196,16 @@ void thread::execute_cgi(const char* path,const char* method,const char* query_s
     int content_length = -1;
 
     buf[0] = 'A'; buf[1] = '\0';
-    if(method == "GET")
-        while((numchars > 0) && buf != "\n")
+    if(strcasecmp(method,"GET") == 0)
+        while((numchars > 0) && strcmp("\n",buf))
             numchars = this->get_line(this->client_sock,buf,sizeof(buf));
     else
     {
         numchars = this->get_line(this->client_sock,buf,sizeof(buf));
-        while ((numchars > 0) && buf != "\n")
+        while ((numchars > 0) && strcmp("\n",buf))
         {
             buf[15] = '\0';
-            if(buf == "Contenct-Length:")
+            if(strcasecmp(buf, "Contenct-Length:") == 0)
                 content_length = atoi(&buf[16]);
             numchars = this->get_line(this->client_sock,buf,sizeof(buf));
         }   
@@ -215,8 +215,8 @@ void thread::execute_cgi(const char* path,const char* method,const char* query_s
             return;
         }
     }
-    buf =  "HTTP/1.0 200 OK\r\n";
-    send(this->client_sock,buf.c_str(),buf.size(),0);
+    sprintf(buf,"HTTP/1.0 200 OK\r\n");
+    send(this->client_sock,buf,strlen(buf),0);
     if (pipe(cgi_output) < 0)
     {
         cannot_execute();
@@ -234,34 +234,34 @@ void thread::execute_cgi(const char* path,const char* method,const char* query_s
     }
     if(pid == 0)
     {
-        std::string meth_env;
-        std::string query_env;
-        std::string length_env;
+        char meth_env[255];
+        char query_env[255];
+        char length_env[255];
 
         dup2(cgi_output[1],1);
         dup2(cgi_input[0],0);
         close(cgi_output[0]);
         close(cgi_input[1]);
-        meth_env = "REQUEST_METHOD=" + method;
-        putenv((char*)meth_env.c_str());
-        if(method == "GET")
+        sprintf(meth_env, "REQUEST_METHOD=%s", method);
+        putenv(meth_env);
+        if(strcasecmp(method,"GET") == 0)
         {
-            query_env = "QUERY_STRING=" + method.substr(found);
-            putenv((char*)query_env.c_str());
+            sprintf(query_env, "QUERY_STRING=%s", query_string);
+            putenv(query_env);
         }
         else
         {
-            length_env = "CONTENT_LENGTH=" + content_length;
-            putenv((char*)length_env.c_str());
+            sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
+            putenv(length_env);
         }
-        execl(path.c_str(),path.c_str(),NULL);
+        execl(path,path,NULL);
         exit(0);
     }
     else
     {
         close(cgi_output[1]);
         close(cgi_input[0]);
-        if(method == "POST")
+        if(strcasecmp(method,"POST") == 0)
         {
             for(i = 0;i < content_length;i++)
             {
@@ -334,19 +334,19 @@ void* thread::accept_request(void* arg)
     if(stat(path,&st) == -1)
     {
         while((numchars > 0) && strcmp("\n",buf))
-            numchars = thread_obj->get_line(thread_obj->client_sock,buf);
+            numchars = thread_obj->get_line(thread_obj->client_sock,buf,sizeof(buf));
         thread_obj->not_found(thread_obj->client_sock);
     }
     else
     {
         if((st.st_mode & S_IFMT) == S_IFDIR)
-            path += "index.html";
+            strcat(path,"/index.html");
         if((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH))
             cgi = 1;
         if(!cgi)
             thread_obj->server_file(path);
         else
-            thread_obj->execute_cgi(path,method,found+1);
+            thread_obj->execute_cgi(path,method,query_string);
     }
     close(thread_obj->client_sock);
     return NULL;
@@ -361,11 +361,12 @@ int thread::ThreadCreate(int client_sock)
     }
     this->client_sock = client_sock;
     pthread_t newthread;
-    if(pthread_create(&newthread,NULL,accept_request,(void*)this) != 0)
+    int res = pthread_create(&newthread,NULL,accept_request,(void*)this);
+    if(res != 0)
     {
-        perror("pthread_create");
+        std::cerr << "pthread_create failed, errno:" << res << std::endl;
         return -2;
     }
-    return 0;
+    return 1;
 }
 

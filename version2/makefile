@@ -4,14 +4,14 @@ SOURCE=$(wildcard *.cpp)
 OBJ=$(patsubst *.cpp, *.o, $(SOURCE))
 
 
-LIBS := pthread socket
+LIBS := pthread 
 
 CFLAGS=-Wall -fPIC -O2
 CC=g++ -std=c++11
 
 all:$(EXE)
 $(EXE):$(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^  $(addprefix -l, $(LIB)) 
+	$(CC) $(CFLAGS) -o $@ $^  $(addprefix -l, $(LIBS)) 
 
 %.o:%.cpp
 	$(CC) $(CFLAGS) -o $@ -c $<
